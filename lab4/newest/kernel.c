@@ -1,0 +1,226 @@
+/*************************************
+Luke Darrow 11349190
+CptS 460 Lab 4 kernel.c
+*************************************/
+
+//as shown in KC's textbook
+PROC *kfork(char *filename) // create a child process, begin from body()
+{
+    int i;
+    u16 segment;
+    
+    // Get the new proc
+    PROC *p = get_proc(&freeList);
+    if (p == 0)
+    {
+        // if there were no procs, report kfork's failure
+        printf("No available free procs\n");
+        return 0;
+    }
+    
+    // initialize the proc...
+    p->status = READY;
+    p->priority = 1;
+    p->ppid = running->pid;
+    p->parent = running;
+    
+    // now to setup the kstack!
+    // first things first, lets clean up the registers by setting them to 0.
+    for (i = 1; i<10; i++)
+        p->kstack[SSIZE - i] = 0;
+        
+    p->kstack[SSIZE - 1] = (int)body; // now we need to make sure to call tswitch from body when the proc runs...
+    p->ksp = &(p->kstack[SSIZE - 9]); // set the ksp to point to the top of the stack
+    
+    // set it up to load umode properly!
+    segment = (p->pid + 1) * 0x1000;
+    load(filename, segment);
+
+    //initialize everything to 0
+    for(i = 0; i < 13; i++)
+        put_word(0,segment, segment-(i * 2));
+
+    //initialize the process usermode stack to execture the loaded image
+    put_word(0x0200, segment, segment-2);
+    put_word(segment, segment, segment-4);
+    put_word(segment, segment, segment-22);
+    put_word(segment, segment, segment-24);
+    p->uss = segment;//beginning of segment
+    p->usp = segment-24;//top of stack
+    
+    // enter the proc into the readyQueue, since it's now ready for primetime!
+    enqueue(&readyQueue, p);
+    printf("Proc[%d] forked child Proc[%d] at segment %x\n", running->pid, p->pid, segment);
+    // return the new proc!!!
+    return (p->pid);
+}
+
+u8 get_byte(u16 segment, u16 offset){
+ 	 u8 byte;
+ 	 setds(segment);
+ 	 byte = *(u8 *)offset;
+ 	 setds(0x1000);
+ 	 return byte;
+}
+
+int get_word(u16 segment, u16 offset){
+	u16 word;
+	setds(segment);
+	word = *(u16 *)offset;
+	setds(0x1000);
+	return word;
+}
+
+int put_byte(u8 byte, u16 segment, u16 offset){
+  	setds(segment);
+  	*(u8 *)offset = byte;
+  	setds(0x1000);
+}
+
+int put_word(u16 word, u16 segment, u16 offset){
+	setds(segment);
+	*(u16 *)offset = word;
+	setds(0x1000);
+}
+
+//just calls switch
+int do_tswitch()
+{
+	printf("proc %d tswitch()\n", running->pid);
+	tswitch();
+	printf("proc %d resumes\n", running->pid);
+}
+
+//as shown in KC's textbook
+int do_kfork()
+{
+	//get pointer to child process from kfork()
+	PROC *p = kfork("/bin/u1");
+
+	//if 0, kfork failed!
+	if (p == 0)
+	{
+		printf("kfork failed\n");
+		return -1;
+	}
+	else
+	{
+		//print results
+		printf("PROC %d kfork a child %d\n", running->pid, p->pid);
+		//return the pid of the newly forked process
+		return p->pid;
+	}
+}
+
+//changes running process status to ZOMBIE, then calls tswitch() to give up CPU
+int do_exit()
+{
+	int exitValue;
+
+	if (running->pid == 1 && nproc > 2){
+		printf("other procs still exist, P1 can't die yet\n");
+		return -1;
+	}
+
+	//ask for exitValue (value), e.g. 123
+	printf("enter an exitValue (0-9): ");
+	//rgets(exitValue);
+	exitValue = (getc()&0x7F) - '0';
+	//call kexit converting exitValue to integer
+	kexit(exitValue);
+}
+
+//stops process to wait for an event
+int do_sleep()
+{
+	int event = 0;
+	//ask for eventValue (value), e.g. 123
+	printf("enter an eventValue: ");
+	//rgets(input);
+	event = (getc()&0x7F) - '0';
+
+	//call kexit after converting input to integer
+	ksleep(event);
+}
+
+//wakeup sleeping process for event
+int do_wakeup()
+{
+	int event = 0;
+
+	//ask for eventValue (value), e.g. 123
+	printf("enter an exitValue: ");
+	//rgets(input);
+	event = (getc()&0x7F) - '0';
+
+	//call kexit converting exitValue to integer
+	kwakeup(event);
+}
+
+//free's up a zombies resources and puts it back in the ready queue
+int do_wait()
+{
+	int pid;
+	int status;
+
+	pid = kwait(&status);
+	if(pid)
+		printf("pid=%d, status=%d\n", pid, status);
+	else
+		printf("wait error: no child\n");
+}
+
+int body()
+{ 
+	char c;
+
+	printf("proc %d starts from body()\n", running->pid);
+
+	while(1)
+	{
+		printf("-----------------------------------------\n");
+		//prints the list of procs that are initialized and free
+		printf("freelist = ");
+		printQueue(freeList);// optional: show the freeList
+
+		//print ready queue which are procs that are ready
+		printf("readyQueue = ");
+		printQueue(readyQueue); // show the readyQueue
+
+		printf("sleepList = ");
+		printQueue(sleepList);
+
+		printf("-----------------------------------------\n");
+
+		printf("proc %d running: parent=%d\n",running->pid,running->ppid);
+		printf("enter a char [s|f|q z|a|w u] : ");
+
+		c = getc();
+		printf("%c\n", c);
+
+		switch(c)
+		{
+			case 'f': //fork a child off of the current process
+				do_kfork();
+				break;
+			case 's': //switch to next process in ready queue
+				do_tswitch();
+				break;
+			case 'q': //zombie the current process
+				do_exit();
+				break;
+			case 'z': //running PROC go to sleep on an event value
+				do_sleep();
+				break;
+			case 'a': //wakeup all PROCs sleeping on event
+				do_wakeup();
+				break;
+			case 'w': //to wait for a ZOMBIE child
+				do_wait();
+				break;
+			case 'u':
+				goUmode();
+				break;
+		}
+	}
+}

@@ -1,0 +1,411 @@
+/********************************************************
+Luke Darrow 11349190
+CptS 460
+int.c
+********************************************************/
+
+//reference diagram
+/*************************************************************************
+  usp  1   2   3   4   5   6   7   8   9  10   11   12    13  14  15  16
+----------------------------------------------------------------------------
+ |uds|ues|udi|usi|ubp|udx|ucx|ubx|uax|upc|ucs|uflag|retPC| a | b | c | d |
+----------------------------------------------------------------------------
+***************************************************************************/
+
+//syscall handler
+
+#define PA 13
+#define PB 14
+#define PC 15
+#define PD 16
+#define AX  8
+
+char buf[64];
+
+extern PROC proc[];
+
+char *hh[ ] = {"FREE   ", "READY  ", "SLEEP  ", "ZOMBIE ", "KILLED ", 0};
+
+int kcinth()
+{
+   u16 segment, offset;
+   int a,b,c,d, r;
+
+//==> WRITE CODE TO GET get syscall parameters a,b,c,d from ustack
+
+   segment = running->uss;
+   offset = running->usp;
+
+   a = get_word(segment, offset + 2*PA);
+   b = get_word(segment, offset + 2*PB);
+   c = get_word(segment, offset + 2*PC);
+   d = get_word(segment, offset + 2*PD);
+
+   switch(a){
+       case 0 : r = kgetpid();        break;
+       case 1 : r = kps();            break;
+       case 2 : r = kchname(b);       break;
+       case 3 : r = kkfork();         break;
+       case 4 : r = ktswitch();       break;
+       case 5 : r = kkwait(b);        break;
+       case 6 : r = kkexit(b);        break;
+       case 7 : r = fork();           break;
+       case 8 : r = exec(b);          break;
+
+       case 9 : r = sout(b);          break;
+       case 10: r = sin(b);           break;
+
+       case 30 : r = kpipe(b);             break;
+       case 31 : r = read_pipe(b,c,d);     break;
+       case 32 : r = write_pipe(b,c,d);    break;
+       case 33 : r = close_pipe(b);        break;
+       case 34 : r = pfd();                break;
+
+       case 99: kkexit(b);            break;
+       default: printf("invalid syscall # : %d\n", a); 
+   }
+
+//==> WRITE CODE to let r be the return value to Umode
+   put_word(r, segment, offset + 2*AX);
+
+}
+
+//============= WRITE C CODE FOR syscall functions ======================
+
+//return the proc's pid
+int kgetpid()
+{
+	return running->pid;
+}
+
+//enter Kernel to print the status info of the procs
+int kps()
+{
+    int i, count;
+    int showmoreinfo = 0;
+    int showevent = 0;
+    int showexitcode = 0;
+    PROC *p;
+    
+    printf("*******************************MENU************************************\n");
+    printf("*  name       status       pid       ppid       event       exitcode  *\n");
+    printf("***********************************************************************\n");
+
+    for (i = 0; i < NPROC; i++)
+    {   // initialize all procs
+        showmoreinfo = 1;
+        showevent = 0;
+        showexitcode = 0;
+        p = &proc[i];
+        count = 14 - strlen(p->name);
+        printf("%s", p->name);
+        while (count-- > 0)
+            printf(" ");
+        
+        // write the status and set the information vars!
+        switch (p->status)
+        {
+            case FREE:
+                printf("FREE         ");
+                showmoreinfo = 0;
+                showexitcode = 1;
+                break;
+            case READY:
+                printf("READY        ");
+                break;
+            case RUNNING:
+                printf("RUNNING      ");
+                break;
+            case STOPPED:
+                printf("STOPPED      ");
+                showexitcode = 1;
+                break;
+            case SLEEP:
+                printf("SLEEP        ");
+                showevent = 1;
+                break;
+            case ZOMBIE:
+                printf("ZOMBIE       ");
+                showevent = 1;
+                break;
+        }
+        
+        // show pid and ppid?
+        if (showmoreinfo == 1)
+            printf("%d         %d         ", p->pid, p->ppid);
+        else
+            printf("                    ");
+            
+        // show event num?
+        if (showevent == 1)
+            printf("%d             ", p->event);
+        else
+            printf("              ");
+        
+        // show exit code?
+        if (showexitcode == 1)
+            printf("%d\n", p->exitCode);
+        else
+            printf("\n");
+    }
+    printf("-----------------------------------------------------------------------\n");
+    return 1;
+}
+
+//ask for a string *s, enter Kernel to change the running proc's name to *s
+int kchname(char *name)
+{
+	//WRITE C CODE to change running's name string;
+	char c;
+	int i = 0;
+	
+	while (i < 32)
+	{
+		c = get_byte(running->uss, name + i);
+		running->name[i] = c;
+		if (c == '\0')
+			break;
+		i++;
+	}
+}
+
+int kkfork()
+{
+	//use you kfork() in kernel;
+	//return child pid or -1 to Umode!!!
+	return kfork("/bin/u1");
+}
+
+//enter Kernel to switch process (call tswitch())
+int ktswitch()
+{
+	return tswitch();
+}
+
+//enter Kernel to wait for a ZOMBIE chile,
+//return its pid (or -1 if no child) and its exitValue
+int kkwait(int *status)
+{
+	int pid, c;
+	pid = kwait(&c);
+	put_word(c, running->uss, status);
+	return pid;
+}
+
+//enter Kernel to die with an exitValue
+int kkexit(int value)
+{
+	//use your kexit() in LAB3
+	//do NOT let P1 die
+	kexit(value);
+}
+
+//begin lab5
+//copies Umode image of running to child segment
+int copyImage(u16 parent_seg, u16 child_seg, u16 size)
+{
+	u16 i;
+	for (i=0; i < size ; i++) 
+		put_word(get_word(parent_seg, 2*i), child_seg, 2*i);
+}
+
+int goUmode();
+
+int fork()
+{
+	int pid, i;
+	u16 segment;
+	PROC *p = kfork(0);//kfork a child using 0, do not load image file
+
+	//1) create child proc in such a way that when the child
+	//   starts to run (in Kmode), it RESUMES TO goUmode()
+
+	// check if failed
+	if (p == 0)
+		return -1;//failure, return -1
+
+	segment = (p->pid + 1) * 0x1000; // child segment
+	printf("pid=%d segment=0x%x\n", p->pid, segment);
+
+	//copy parent's U image to child
+	copyImage(running->uss, segment, 32 * 1024);  // copy 32K words 
+	p->uss = segment;         // child’s own segment
+	p->usp = running->usp;    // set same as parent's usp
+
+	// change the uDS, uES, uCS, AX in child's ustack
+	put_word(segment, segment, p->usp);        // uDS=segment 
+	put_word(segment, segment, p->usp+2);      // uES=segment 
+	put_word(0,       segment, p->usp+2*8);    // uax=0 
+	put_word(segment, segment, p->usp+2*10);   // uCS=segment  
+        nproc++;
+
+	//print the new readyqueue
+        printf("readyQueue ");
+	printQueue(readyQueue);
+	//print success message
+        printf("Proc %d forked a child %d at segment=0x%x\n", running->pid, p->pid, segment);
+
+	for(i = 0; i < NFD; i++)
+	{
+		p->fd[i] = running->fd[i];
+		if(p->fd[i] != 0)
+		{
+			p->fd[i]->refCount++;
+			if (p->fd[i]->mode == READ_PIPE)
+				p->fd[i]->pipe_ptr->nreader++;
+			if (p->fd[i]->mode == WRITE_PIPE)
+				p->fd[i]->pipe_ptr->nwriter++;
+		}
+	}
+
+	//return the child's pid
+	return p->pid;
+}
+
+//exec function takes in a filename
+//creates an image of the file on the running process
+int exec(char *y)
+{
+	int i, len = 0;
+	char filename[64], *cp = filename, c;
+	char pathname[32], file[16],*cq;
+	u16 segment = running->uss; // same segment
+	u16 offset, HIGH;
+
+	/* get filename from U space with a length limit of 64 */
+	while( (*cp=get_byte(segment, y)) != 0 )
+	{
+		y++;
+		cp++;
+	}
+
+	//now in our own segment
+	segment = (running->pid + 1) * 0x1000;
+	printf("exec : filename=%s\n", filename);
+
+	//extract the filename to exec
+	cp = filename;
+	cq = file;
+
+	//move past leading blanks just in case
+	while(*cp == ' ')
+		cp++;
+
+	while (*cp != ' ' && *cp != 0)
+	{
+		*cq = *cp;
+		cq++; cp++;
+	}
+
+	*cq = 0;
+
+	//set up the filename by concatenating the filename to the 
+	//end of the path /bin/ since all executeable files are in bin
+	strcpy(pathname, "/bin/");
+	strcat(pathname, file);
+  
+	printf("Proc %d exec to %s in segment 0x%x\n", running->pid, pathname, segment);
+ 
+	//return -1 if load fails
+	if (!load(pathname, segment))
+	{
+		printf("exec %s failed\n", pathname);
+		return -1;
+	}
+
+	//"after loading the new Umode image, fix up the ustack
+	//contents to make the process execute from virtual
+	//address 0 when it returns to Umode.
+
+	//a) re-establish ustack to the very high end of the segment
+	//b) "pretend" it had done INT 80 from (virtual address) 0
+	//c) fill in uCS, uDS, uES in ustack
+	//d) execute from VA=0 => uPC=0, uFLAG=0x0200, all others = 0
+	//e) fix proc.uSP to point at the current ustack TOP (-24)
+
+	len = strlen(filename) + 1;
+	//check if odd
+	if (len % 2)
+		len++;//add a byte
+
+	offset = -len;
+
+	for (i=0; i < len; i++)
+	{
+		put_byte(filename[i], segment, offset + i);
+	}
+ 
+	HIGH = offset - 2;
+
+	// *s points at the filename string
+	put_word(offset, segment, HIGH);
+  
+	// re-initialize process ustack for it to return to VA=0
+	for (i=1; i<=12; i++)
+	{
+		put_word(0, segment, HIGH - 2 * i);
+	}
+
+	//fix proc.uSP to point at the current ustack TOP (-24)
+	running->uss = segment;
+	running->usp = HIGH - 2 * 12;
+
+	/*HIGH flag uCS uPC ax bx cx dx bp si  di uES uDS  LOW          */
+	/*      -1  -2  -3  -4 -5 -6 -7 -8 -9 -10 -11 -12 ustack layout */
+
+	put_word(running->uss, segment, HIGH-2*12);   // saved uDS=segment
+	put_word(running->uss, segment, HIGH-2*11);   // saved uES=segment
+	put_word(0,            segment, HIGH-2*3);    // uPC=0
+	put_word(segment,      segment, HIGH-2*2);    // uCS=segment
+	put_word(0x0200,       segment, HIGH-2*1);    // Umode flag=0x0200
+	//exec function doesn't return, go to goUmode()
+}
+
+//end of lab5 stuff
+
+int sin(char *y)
+{
+	
+	// get a line from serial port 0; write line to Umode
+	char input[128], *p, c;
+	int n;
+
+	sgetline(input);
+	n = strlen(input);
+
+	p = input;
+
+	while(*p != 0)
+	{
+		put_byte(*p, running->uss, y);
+		p++;
+		y++;
+	}
+	put_byte(0, running->uss, y);
+	//return length
+	return n;
+	
+}
+
+int sout(char *y)
+{
+	// get line from Umode; write line to serial port 0
+	char output[128], *p, c;
+	p = output;
+	c = get_byte(running->uss, y);
+
+	while(c != 0)
+	{
+		*p =c;
+		p++;
+		y++;
+		c = get_byte(running->uss, y);
+	}
+	*p = 0;
+
+	printf("outline = %s", output);
+
+	sputline(output);
+	return 0;
+	
+}

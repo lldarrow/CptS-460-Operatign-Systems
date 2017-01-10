@@ -1,0 +1,118 @@
+/********************************************************
+Luke Darrow 11349190
+CptS 460
+timer.c from book
+edited thandler to display time in right corner
+********************************************************/
+
+#define LATCH_COUNT 0x00
+#define SQUARE_WAVE 0x36
+
+#define TIMER_FREQ 1193182L
+#define TIMER_COUNT TIMER_FREQ/60
+
+#define TIMER0 0x40
+#define TIMER_MODE 0x43
+#define TIMER_IRQ 0
+
+u16 tick;
+
+int enable_irq(u16 irq_nr)
+{
+	lock();
+	out_byte(0x21, in_byte(0x21) & ~(1 << irq_nr));
+
+}
+
+int timer_init()
+{
+	/* Initialize channel 0 of the 8253A timer to e.g. 60 Hz. */
+
+	printf("timer init\n");
+	tick = 0; 
+	out_byte(TIMER_MODE, SQUARE_WAVE);	// set timer to run continuously
+	out_byte(TIMER0, TIMER_COUNT);	// timer count low byte
+	out_byte(TIMER0, TIMER_COUNT >> 8);	// timer count high byte 
+	enable_irq(TIMER_IRQ); 
+}
+
+//timer interrupt handler
+int thandler()
+{
+  PROC *p, *q = 0;
+  int i;
+  //save the old cursor location
+  u16 old_column = column, old_row = row;
+  tick++; 
+  tick %= 60; //tick is in milliseconds?
+
+  if (tick == 0){                      // at each second
+      //set cursor location to bottom right
+      column = 70;
+      row = 24;
+
+      sec++;
+      if(sec % 60 == 0 && sec != 0){
+          min++;
+          sec = 0;
+      }
+
+      if(min % 60 == 0 && min != 0){
+          hour++;
+          min = 0;
+      }
+
+      //print hour
+      putc(hour/10 + '0');
+      putc(hour%10 + '0');
+      putc(':');
+      //print min
+      putc(min/10 + '0');
+      putc(min%10 + '0');
+      putc(':');
+      //print sec
+      putc(sec/10 + '0');
+      putc(sec%10+ '0');
+
+      //lab7 task 2
+      //if(running->time != 0)
+      //    running->time--;
+      //lab7 task 3
+      while(p = dequeue(&sleepList))
+      {
+        if(p->event == p->pid)
+        {
+          p->time--;
+        }
+        enqueue(&q, p);
+      }
+      sleepList = q;
+  }
+  out_byte(0x20, 0x20);                // tell 8259 PIC EOI
+
+  //go back to old location so we can type commands
+  column = old_column;
+  row = old_row;
+
+  //lab7 task 2
+  /*
+  if(running->time == 0)
+  {
+    printf("time up, switch\n");
+    tswitch();
+  }
+  */
+  //lab7 task 3
+  q = 0;
+  while(p = dequeue(&sleepList))
+  {
+    if(p->time == 0)
+    {
+      p->status = READY;
+      enqueue(&readyQueue, p);
+      continue;
+    }
+    enqueue(&q, p);
+  }
+  sleepList = q;
+}

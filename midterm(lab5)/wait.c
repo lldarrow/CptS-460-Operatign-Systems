@@ -1,0 +1,101 @@
+/*************************************
+Luke Darrow 11349190
+CptS 460 Lab 4 wait.c
+*************************************/
+
+//stops process to wait for an event
+int ksleep(int event)
+{
+	running->status = SLEEP; // change status to SLEEP
+	running->event = event;  // record event in PROC.event
+	enqueue(&sleepList, running);//enter sleepList
+	tswitch();               // give up CPU, switch process
+}
+
+//wake up sleeping process for an event
+int kwakeup(int event)
+{
+	PROC *p, *q = 0;
+
+	while(p = dequeue(&sleepList))
+	{
+		if(p->event == event)
+		{
+			p->status = READY;
+			enqueue(&readyQueue, p);
+			continue;
+		}
+		enqueue(&q, p);
+	}
+	sleepList = q;
+}
+
+int ready(PROC *p)
+{
+	p->event = 0;
+	p->status=READY;
+	enqueue(&readyQueue, p);
+	printf("wakeup proc %d\n", p->pid);
+}
+
+//turns process into zombie. if it has children, all its children go to p1
+int kexit(int exitValue)
+{
+	int i, wk1 = 0;//wk1 is a flag
+	PROC *p;
+
+	//send children (dead or alive) to P1's orphanage
+	for (i = 1; i < NPROC; i++)
+	{
+		p = &proc[i];
+		if(p->status != FREE && p->ppid == running->pid)
+		{
+			p->ppid = 1;
+			p->parent = &proc[1];
+			wk1++;
+		}
+	}
+
+	//restore name string
+	strcpy(running->name, pname[running->pid]);
+	//record exitValue and become a ZOMBIE
+	running->exitCode = exitValue;
+	running->status = ZOMBIE;
+
+	//wakeup parent and P1
+	kwakeup(running->parent);
+	if(wk1)//if flag set, wakeupt
+		kwakeup(&proc[1]);
+	tswitch();
+}
+
+//free's up a zombies resources and puts it back in the ready queue
+int kwait(int *status)  // wait for ZOMBIE child
+{
+	PROC *p;
+	int i, found = 0;
+
+	while(1)
+	{
+		for (i = 0; i < NPROC; i++)
+		{
+			p = &proc[i];
+			if (p->ppid == running->pid && p->status != FREE)
+			{
+				found = 1;
+				//lay the dead child to rest
+				if(p->status == ZOMBIE)
+				{
+					*status = p->exitCode;
+					p->status = FREE;//free its PROC
+					put_proc(&freeList, p);
+					nproc--;
+					return (p->pid);//return its pid
+				}
+			}
+		}
+		if (!found)//no child
+			return -1;
+		ksleep(running);//has kids still alive
+	}
+}
